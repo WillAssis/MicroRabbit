@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using MicroRabbit.Banking.Api.Configurations;
+using MicroRabbit.Infra.IoC;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
@@ -25,6 +27,18 @@ namespace MicroRabbit.Banking.Api
         public void ConfigureServices(IServiceCollection services)
         {
             services.AddControllers();
+
+            //Swagger configration setup
+            SwaggerSetup.AddSwaggerSetup(services);
+
+            //EntityFrmework configuration setup
+            EntityFrameworkSetup.AddEntityFrameworkSetup(services, Configuration);
+
+            //Mediator configration setup
+            MediatorSetup.AddMediatorSettup(services);
+
+            //Dependency Injection
+            DependencyInjection.Register(services);
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
@@ -43,6 +57,9 @@ namespace MicroRabbit.Banking.Api
             {
                 endpoints.MapControllers();
             });
+
+            //Swagger configration setup
+            SwaggerSetup.UseSwaggerSetup(app);
         }
     }
 }
