@@ -2,6 +2,7 @@
 using MicroRabbit.Domain.Core.Bus;
 using MicroRabbit.Domain.Core.Commands;
 using MicroRabbit.Domain.Core.Events;
+using Microsoft.Extensions.DependencyInjection;
 using Newtonsoft.Json;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
@@ -19,10 +20,14 @@ namespace MicroRabbit.Infra.Bus
         private readonly IMediator mediator;
         private readonly Dictionary<string, List<Type>> handlers;
         private readonly List<Type> eventTypes;
+        private readonly IServiceScopeFactory serviceScopeFactory;
 
-        public RabbitMQBus(IMediator mediator)
+        private IModel consumerChannel;
+
+        public RabbitMQBus(IMediator mediator, IServiceScopeFactory serviceScopeFactory)
         {
             this.mediator = mediator;
+            this.serviceScopeFactory = serviceScopeFactory;
             this.handlers = new Dictionary<string, List<Type>>();
             this.eventTypes = new List<Type>();
         }
@@ -86,16 +91,16 @@ namespace MicroRabbit.Infra.Bus
             };
 
             var connection = factory.CreateConnection();
-            var channel = connection.CreateModel();
+            consumerChannel = connection.CreateModel();
 
             var eventName = typeof(TEvent).Name;
 
-            channel.QueueDeclare(eventName, false, false, false, null);
+            consumerChannel.QueueDeclare(eventName, false, false, false, null);
 
-            var consumer = new AsyncEventingBasicConsumer(channel);
+            var consumer = new AsyncEventingBasicConsumer(consumerChannel);
             consumer.Received += Consumer_Received;
 
-            channel.BasicConsume(eventName, true, consumer);
+            consumerChannel.BasicConsume(eventName, false, consumer);
         }
 
         private async Task Consumer_Received(object sender, BasicDeliverEventArgs @event)
@@ -106,10 +111,11 @@ namespace MicroRabbit.Infra.Bus
             try
             {
                 await ProcessEvent(eventName, message).ConfigureAwait(false);
+                consumerChannel.BasicAck(@event.DeliveryTag, false);
             }
             catch (Exception ex)
             {
-
+                consumerChannel.BasicNack(@event.DeliveryTag, false, true);
             }
         }
 
@@ -117,20 +123,23 @@ namespace MicroRabbit.Infra.Bus
         {
             if (handlers.ContainsKey(eventName))
             {
-                var subscriptions = handlers[eventName];
-
-                foreach (var subscription in subscriptions)
+                using (var scope = serviceScopeFactory.CreateScope())
                 {
-                    var handler = Activator.CreateInstance(subscription);
+                    var subscriptions = handlers[eventName];
 
-                    if (handler == null) continue;
+                    foreach (var subscription in subscriptions)
+                    {
+                        var handler = scope.ServiceProvider.GetService(subscription);
 
-                    var eventType = eventTypes.SingleOrDefault(t => t.Name == eventName);
-                    var @event = JsonConvert.DeserializeObject(message, eventType);
-                    var concreteType = typeof(IEventHandler<>).MakeGenericType(eventType);
+                        if (handler == null) continue;
 
-                    await (Task)concreteType.GetMethod("Handle").Invoke(handler, new object[] { @event });
-                }
+                        var eventType = eventTypes.SingleOrDefault(t => t.Name == eventName);
+                        var @event = JsonConvert.DeserializeObject(message, eventType);
+                        var concreteType = typeof(IEventHandler<>).MakeGenericType(eventType);
+
+                        await (Task)concreteType.GetMethod("Handle").Invoke(handler, new object[] { @event });
+                    }
+                }             
             }
         }
     }
